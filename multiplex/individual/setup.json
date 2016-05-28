@@ -1,0 +1,12 @@
+{
+ "print_as": "table",
+ "sleep_for": 0.5,
+ "devices": {
+    "0x48": {
+        "0": {
+            "name": "Luminosity",
+            "gain": 1
+        }
+    }
+  }
+}
