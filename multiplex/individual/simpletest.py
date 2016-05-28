@@ -5,6 +5,9 @@
 # Author: Tony DiCola
 # License: Public Domain
 import time
+import os
+import sys
+import json
 from   collections import defaultdict
 
 # Import the ADS1x15 module.
@@ -48,17 +51,39 @@ class sensor(object):
 
     adcs    = adcs()
 
-    def __init__(self, name, address, port, gain):
-        self.name    = name
-        self.address = address
-        self.port    = port
-        self.gain    = gain
+    def __init__(self, address, port, gain, name, converter=lambda v: v):
+        print 'address', address
 
-    def read(self):
+        self.address   = address
+        self.port      = port
+        self.gain      = gain
+        self.name      = name
+        self.converter = converter
+
+    def raw(self):
+        """
+        Note you can also pass in an optional data_rate parameter that controls
+        the ADC conversion time (in samples/second). Each chip has a different
+        set of allowed data rate values, see datasheet Table 9 config register
+        DR bit values.
+        values[i] = adc.read_adc(i, gain=GAIN, data_rate=128)
+        Each value will be a 12 or 16 bit signed integer value depending on the
+        ADC (ADS1015 = 12-bit, ADS1115 = 16-bit).
+        """
         adc = self.adcs.get(self.address)
         val = adc.read_adc(self.port, gain=self.gain)
         return val
         
+    def conv(self, val=None):
+        if val is None:
+            val = self.raw()
+        return self.converter(val)
+
+    def both(self):
+        val = self.raw()
+        cnv = self.conv(val=val)
+        return (val, cnv)
+
     def printer(self):
         print str(self)
 
@@ -70,108 +95,199 @@ class controller(object):
     def __init__(self):
         self.sensors = defaultdict(lambda: defaultdict(dict))
 
-    def add_sensor(self, name, address, port, gain):
-        self.sensors[address][port][name] = sensor(name, address, port, gain)
+        self.print_fmts = {
+            'table': self.print_as_table,
+            'list' : self.print_as_list ,
+            'raw'  : self.print_as_raw
+        }
 
-    def __repr__(self):
-        line = "CONTROLLER START\n"
+        self.max_address   = 0
+        self.max_port      = 0
+        self.max_name      = 0
+        self.max_cell      = 0
 
+        self.fmt_address   = ""
+        self.fmt_port      = ""
+        self.fmt_name      = ""
+        self.fmt_val       = ""
+        self.fmt_row_line  = ""
+        self.fmt_list      = ""
+        self.fmt_list_len  = 0
+
+    def add_sensor(self, address, port, gain, name):
+        self.sensors[address][port][name] = sensor(address, port, gain, name)
+
+        self.max_address   = len(str(hex(address))) if len(str(hex(address))) > self.max_address else self.max_address
+        self.max_port      = len(str(    port    )) if len(str(    port    )) > self.max_port    else self.max_port
+        self.max_name      = len(str(    name    )) if len(str(    name    )) > self.max_name    else self.max_name
+
+        self.max_cell      = max([self.max_port, self.max_name])
+
+        self.fmt_address   = '|'
+        self.fmt_port      = '|'
+        self.fmt_name      = '|'
+        self.fmt_val       = '|'
+        self.fmt_row_line  = '|'
+        self.fmt_list      = ""
+        self.fmt_list_len  = 0
+
+        for sensor_num, (address, ports) in enumerate(sorted(self.sensors.items())):
+            num_ports          = len(ports)
+            len_port           = ( self.max_cell * num_ports )
+            self.fmt_address  += '{:'+str(len_port)+'s}|'
+            self.fmt_row_line += '-'*(len_port) + '|'
+
+            if sensor_num == 0:
+                self.fmt_list     += '|{:'+str(len_port)+'s}'
+                self.fmt_list_len += len_port + 1
+
+            for port_num, (port, names) in enumerate(sorted(ports.items())):
+                self.fmt_port += '{:'+str(self.max_cell)+'s}|'
+
+                if port_num == 0:
+                    self.fmt_list     += '|{:'+str(self.max_cell)+'s}'
+                    self.fmt_list_len += self.max_cell + 1
+
+                for name_num, (name, sens) in enumerate(sorted(names.items())):
+                    self.fmt_name += '{:'+str(self.max_cell)+'s}|'
+                    self.fmt_val  += '{:'+str(self.max_cell)+'s}|'
+
+                    if name_num == 0:
+                        self.fmt_list     += '|{:'+str(self.max_cell)+'s}'
+                        self.fmt_list     += '|{:'+str(self.max_cell)+'s}'
+                        self.fmt_list_len += self.max_cell + 1
+                        self.fmt_list_len += self.max_cell + 1
+
+    def as_dict(self):
+        data = defaultdict(lambda: defaultdict(dict))
+        
         for address, ports in sorted(self.sensors.items()):
             for port, names in sorted(ports.items()):
                 for name, sensor in sorted(names.items()):
-                    line += " address {} port {} name {} sensor {} val {}\n".format(hex(address), port, name, sensor, sensor.read())
+                    data[address][port][name] = sensor.both()
+
+        return data
+
+    def as_table(self):
+        data = self.as_dict()
+        res  = []
+
+        for address, ports in sorted(data.items()):
+            for port, names in sorted(ports.items()):
+                for name, (raw, conv) in sorted(names.items()):
+                    res.append( ( hex(address), port, name, raw, conv ) )
+
+        return res
+
+    def printer(self, fmt='table'):
+        if fmt in self.print_fmts:
+            self.print_fmts[fmt]()
+
+        else:
+            print "unknown format"
+            sys.exit(1)
+
+    def print_as_table(self, fmt="raw"):
+        data      = self.as_table()
+
+        gtr       = 3 if fmt == "raw" else 4
+
+        addresses = [ str(d[  0]) for d in data ]
+        ports     = [ str(d[  1]) for d in data ]
+        names     = [     d[  2]  for d in data ]
+        vals      = [ str(d[gtr]) for d in data ]
+
+        print self.fmt_row_line.format(            )
+        print self.fmt_address .format( *addresses )
+        print self.fmt_port    .format( *ports     )
+        print self.fmt_name    .format( *names     )
+        print self.fmt_row_line.format(            )
+        print self.fmt_val     .format( *vals      )
+        print self.fmt_row_line.format(            )
+        print
+
+    def print_as_list(self):
+        data      = self.as_table()
+
+        print '-'*(self.fmt_list_len+1)
+
+        for row_num, line in enumerate(data):
+            lineFmt =  self.fmt_list.format(*[str(x) for x in line])
+            print lineFmt + '|'
+
+        print '-'*(self.fmt_list_len+1)
+        print
+
+    def print_as_raw(self):
+        print str(self)
+
+    def __repr__(self):
+        data = self.as_dict()
+
+        line = "CONTROLLER START\n"
+
+        for address, ports in sorted(data.items()):
+            for port, names in sorted(ports.items()):
+                for name, (raw, conv) in sorted(names.items()):
+                    line += " address {} port {} name {} raw {} conv {}\n".format(hex(address), port, name, raw, conv)
 
         line += "CONTROLLER END\n"
 
         return line
 
-    def printer(self):
-        print str(self)
+def correct_devices(devices):
+    for address, ports in devices.items():
+        for port, data in ports.items():
+            ports[int(port)] = data
+            del ports[port]
+        devices[int(address, 16)] = ports
+        del devices[address]
+    return devices
 
-"""
-# Print nice channel column headers.
-
-header_1_address = ('{:'+str(7*len(ports)-1)+'s}|')*len(addresses)
-header_2_ports   = '{:>6}|' * len(ports)
-values_str       = header_2_ports * len(addresses)
-
-#print 'header_1_address', header_1_address
-#print 'header_2_ports  ', header_2_ports
-#print 'values_str      ', values_str
-
-header_1 = '|' + ( header_1_address.format( *[hex(x) for x in addresses] )                  )
-header_2 = '|' + ( header_2_ports  .format( *ports                       ) * len(addresses) )
-header_3 = '-' * ( len(addresses) * len(ports) * 7 + 1                                      )
-
-print( header_1 )
-print( header_2 )
-print( header_3 )
-"""
-
-"""
-    values  = [ '' for n in xrange((len(ports)*len(addresses))) ]
-
-    for an, add in enumerate(adcs):
-        #print 'address', an, add[0]
-
-        # Read all the ADC channel values in a list.
-        ap, adc = add
-
-        for pn, p in enumerate(ports):
-            key = ( an * len(ports) )+pn
-
-            #print ' port', pn, ' ', p, 'key', key
-
-            # Read the specified ADC channel using the previously set gain value.
-            try:
-                v             = adc.read_adc(p, gain=GAIN)
-                values[ key ] = v
-
-            except IOError:
-                break
-
-            # Note you can also pass in an optional data_rate parameter that controls
-            # the ADC conversion time (in samples/second). Each chip has a different
-            # set of allowed data rate values, see datasheet Table 9 config register
-            # DR bit values.
-            #values[i] = adc.read_adc(i, gain=GAIN, data_rate=128)
-            # Each value will be a 12 or 16 bit signed integer value depending on the
-            # ADC (ADS1015 = 12-bit, ADS1115 = 16-bit).
-
-    # Print the ADC values.
-    print('|' + values_str.format(*values) )
-
-"""
-
-def main(config):
+def start(config):
     print('Reading ADS1x15 values, press Ctrl-C to quit...')
 
-    ctrl = controller()
+    print_as  = config.get('print_as' , 'table')
+    sleep_for = config.get('sleep_for', 0.5)
+    devices   = config['devices']
 
-    for address, ports in sorted(config.items()):
+    devices   = correct_devices(devices)
+
+    ctrl      = controller()
+
+    for address, ports in sorted(devices.items()):
         for port, cfg in sorted(ports.items()):
             name = cfg["name"]
-            gain = cfg["gain"]
-            ctrl.add_sensor( name, address, port, gain )
+            gain = cfg.get("gain", 1)
+            ctrl.add_sensor( address, port, gain, name )
 
     # Main loop.
     while True:
-        ctrl.printer()
+        ctrl.printer(fmt=print_as)
+        #ctrl.printer(fmt='raw'  )
+        #ctrl.printer(fmt='list' )
+        #ctrl.printer(fmt='table')
         # Pause for half a second.
-        time.sleep(0.5)
+        time.sleep(sleep_for)
 
 
 
-config = {
-    0x48: {
-        0: {
-            "name": "Luminosity",
-            "gain": 1
-        }
-    }
-}
+
+
+def main():
+    infile = sys.argv[1]
+
+    filecont = open(infile, 'r').read()
+
+    print filecont
+
+    config = json.loads(filecont)
+
+    print config
+
+    start(config)
 
 
 
 if __name__ == "__main__":
-    main(config)
+    main()
