@@ -56,13 +56,16 @@ class sensor(object):
     def __init__(self, address, port, gain, name, model="", version=""):
         print 'address', address
 
-        self.address   = address
-        self.port      = port
-        self.gain      = gain
-        self.name      = name
-        self.model     = model
-        self.version   = version
-        self.converter = converters.get_converter(self.model, self.version, self.gain)
+        if gain == "2/3": gain = 2/3
+
+        self.address    = address
+        self.port       = port
+        self.gain       = gain
+        self.name       = name
+        self.model      = model
+        self.version    = version
+        self.to_voltage = converters.ADS1115_value_converter(gain)
+        self.converter  = converters.get_converter(self.model, self.version, self.to_voltage)
 
     def raw(self):
         """
@@ -266,11 +269,11 @@ def start(config):
 
     # Main loop.
     while True:
-        #ctrl.printer(fmt=print_as)
+        ctrl.printer(fmt=print_as)
 
-        ctrl.printer(fmt='raw'  )
-        ctrl.printer(fmt='list' )
-        ctrl.printer(fmt='table')
+        #ctrl.printer(fmt='raw'  )
+        #ctrl.printer(fmt='list' )
+        #ctrl.printer(fmt='table')
 
         # Pause for half a second.
         time.sleep(sleep_for)

@@ -1,5 +1,5 @@
 {
- "print_as": "table",
+ "print_as": "list",
  "sleep_for": 0.5,
  "devices": {
     "0x48": {
