@@ -4,8 +4,18 @@
  "devices": {
     "0x48": {
         "0": {
-            "name": "Luminosity",
-            "gain": 1
+            "name": "Luminance",
+            "gain": 1,
+            "model": "APDS-9002",
+            "version": "v1.0"
+        }
+    },
+    "0x4B": {
+        "0": {
+            "name": "Light Sensor",
+            "gain": 1,
+            "model": "GL5528",
+            "version": "v1.1"
         }
     }
   }

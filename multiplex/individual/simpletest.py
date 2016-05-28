@@ -10,6 +10,8 @@ import sys
 import json
 from   collections import defaultdict
 
+import converters
+
 # Import the ADS1x15 module.
 import Adafruit_ADS1x15
 
@@ -51,14 +53,16 @@ class sensor(object):
 
     adcs    = adcs()
 
-    def __init__(self, address, port, gain, name, converter=lambda v: v):
+    def __init__(self, address, port, gain, name, model="", version=""):
         print 'address', address
 
         self.address   = address
         self.port      = port
         self.gain      = gain
         self.name      = name
-        self.converter = converter
+        self.model     = model
+        self.version   = version
+        self.converter = converters.get_converter(self.model, self.version, self.gain)
 
     def raw(self):
         """
@@ -84,11 +88,25 @@ class sensor(object):
         cnv = self.conv(val=val)
         return (val, cnv)
 
+    def as_dict(self):
+        raw, conv = self.both()
+
+        return {
+            'address'  : self.address ,
+            'port'     : self.port    ,
+            'gain'     : self.gain    ,
+            'name'     : self.name    ,
+            'model'    : self.model   ,
+            'version'  : self.version ,
+            'raw'      : raw          ,
+            'conv'     : conv
+        }
+
     def printer(self):
         print str(self)
 
     def __repr__(self):
-        return "<SENSOR :: {} : address: {} port: {} gain: {}>".format(self.name, hex(self.address), self.port, self.gain)
+        return "<SENSOR :: {} : address: {} port: {} gain: {} model: {} version: {}>".format(self.name, hex(self.address), self.port, self.gain, self.model, self.version)
         
 
 class controller(object):
@@ -102,34 +120,29 @@ class controller(object):
         }
 
         self.max_address   = 0
-        self.max_port      = 0
-        self.max_name      = 0
         self.max_cell      = 0
 
         self.fmt_address   = ""
-        self.fmt_port      = ""
-        self.fmt_name      = ""
-        self.fmt_val       = ""
+        self.fmt_cell      = ""
         self.fmt_row_line  = ""
         self.fmt_list      = ""
         self.fmt_list_len  = 0
 
-    def add_sensor(self, address, port, gain, name):
-        self.sensors[address][port][name] = sensor(address, port, gain, name)
+    def add_sensor(self, address, port, gain, name, model="", version="", converter=None):
+        self.sensors[address][port][name] = sensor(address, port, gain, name, model=model, version=version)
 
         self.max_address   = len(str(hex(address))) if len(str(hex(address))) > self.max_address else self.max_address
-        self.max_port      = len(str(    port    )) if len(str(    port    )) > self.max_port    else self.max_port
-        self.max_name      = len(str(    name    )) if len(str(    name    )) > self.max_name    else self.max_name
-
-        self.max_cell      = max([self.max_port, self.max_name])
+        self.max_cell      = max([len(str(x)) for x in [hex(address), str(port), str(gain), str(name), str(model), str(version)]] + [self.max_cell])
 
         self.fmt_address   = '|'
-        self.fmt_port      = '|'
-        self.fmt_name      = '|'
-        self.fmt_val       = '|'
+        self.fmt_cell      = '|'
         self.fmt_row_line  = '|'
-        self.fmt_list      = ""
-        self.fmt_list_len  = 0
+
+        num_ids            = 5
+        num_vals           = 2
+        num_cols           = num_ids + num_vals
+        self.fmt_list      = '|' + (('{:'+str(self.max_cell)+'s}|')*(num_ids)) + (('{:>'+str(self.max_cell)+'s}|')*(num_vals))
+        self.fmt_list_len  = (self.max_cell*num_cols) + num_cols + 1
 
         for sensor_num, (address, ports) in enumerate(sorted(self.sensors.items())):
             num_ports          = len(ports)
@@ -137,26 +150,8 @@ class controller(object):
             self.fmt_address  += '{:'+str(len_port)+'s}|'
             self.fmt_row_line += '-'*(len_port) + '|'
 
-            if sensor_num == 0:
-                self.fmt_list     += '|{:'+str(len_port)+'s}'
-                self.fmt_list_len += len_port + 1
-
             for port_num, (port, names) in enumerate(sorted(ports.items())):
-                self.fmt_port += '{:'+str(self.max_cell)+'s}|'
-
-                if port_num == 0:
-                    self.fmt_list     += '|{:'+str(self.max_cell)+'s}'
-                    self.fmt_list_len += self.max_cell + 1
-
-                for name_num, (name, sens) in enumerate(sorted(names.items())):
-                    self.fmt_name += '{:'+str(self.max_cell)+'s}|'
-                    self.fmt_val  += '{:'+str(self.max_cell)+'s}|'
-
-                    if name_num == 0:
-                        self.fmt_list     += '|{:'+str(self.max_cell)+'s}'
-                        self.fmt_list     += '|{:'+str(self.max_cell)+'s}'
-                        self.fmt_list_len += self.max_cell + 1
-                        self.fmt_list_len += self.max_cell + 1
+                self.fmt_cell += '{:'+str(self.max_cell)+'s}|'
 
     def as_dict(self):
         data = defaultdict(lambda: defaultdict(dict))
@@ -164,7 +159,7 @@ class controller(object):
         for address, ports in sorted(self.sensors.items()):
             for port, names in sorted(ports.items()):
                 for name, sensor in sorted(names.items()):
-                    data[address][port][name] = sensor.both()
+                    data[address][port][name] = sensor.as_dict()
 
         return data
 
@@ -174,8 +169,12 @@ class controller(object):
 
         for address, ports in sorted(data.items()):
             for port, names in sorted(ports.items()):
-                for name, (raw, conv) in sorted(names.items()):
-                    res.append( ( hex(address), port, name, raw, conv ) )
+                for name, vals in sorted(names.items()):
+                    model   = vals['model'  ]
+                    version = vals['version']
+                    raw     = vals['raw'    ]
+                    conv    = vals['conv'   ]
+                    res.append( ( hex(address), port, name, model, version, raw, conv ) )
 
         return res
 
@@ -190,46 +189,48 @@ class controller(object):
     def print_as_table(self, fmt="raw"):
         data      = self.as_table()
 
-        gtr       = 3 if fmt == "raw" else 4
+        gtr       = 5 if fmt == "raw" else 6
 
         addresses = [ str(d[  0]) for d in data ]
         ports     = [ str(d[  1]) for d in data ]
         names     = [     d[  2]  for d in data ]
+        models    = [     d[  3]  for d in data ]
+        versions  = [     d[  4]  for d in data ]
         vals      = [ str(d[gtr]) for d in data ]
 
-        print self.fmt_row_line.format(            )
+        print self.fmt_row_line.format()
         print self.fmt_address .format( *addresses )
-        print self.fmt_port    .format( *ports     )
-        print self.fmt_name    .format( *names     )
-        print self.fmt_row_line.format(            )
-        print self.fmt_val     .format( *vals      )
-        print self.fmt_row_line.format(            )
+        print self.fmt_cell    .format( *ports     )
+        print self.fmt_cell    .format( *names     )
+        print self.fmt_cell    .format( *models    )
+        print self.fmt_cell    .format( *versions  )
+        print self.fmt_row_line.format()
+        print self.fmt_cell    .format( *vals      )
+        print self.fmt_row_line.format()
         print
 
     def print_as_list(self):
         data      = self.as_table()
 
-        print '-'*(self.fmt_list_len+1)
+        print '-'*(self.fmt_list_len)
 
         for row_num, line in enumerate(data):
             lineFmt =  self.fmt_list.format(*[str(x) for x in line])
-            print lineFmt + '|'
+            print lineFmt
 
-        print '-'*(self.fmt_list_len+1)
+        print '-'*(self.fmt_list_len)
         print
 
     def print_as_raw(self):
         print str(self)
 
     def __repr__(self):
-        data = self.as_dict()
+        data = self.as_table()
 
-        line = "CONTROLLER START\n"
+        line  = "CONTROLLER START\n"
 
-        for address, ports in sorted(data.items()):
-            for port, names in sorted(ports.items()):
-                for name, (raw, conv) in sorted(names.items()):
-                    line += " address {} port {} name {} raw {} conv {}\n".format(hex(address), port, name, raw, conv)
+        for dat in data:
+            line += " address {} port {} name {} model {} version {} raw {} conv {}\n".format(*dat)
 
         line += "CONTROLLER END\n"
 
@@ -257,16 +258,20 @@ def start(config):
 
     for address, ports in sorted(devices.items()):
         for port, cfg in sorted(ports.items()):
-            name = cfg["name"]
-            gain = cfg.get("gain", 1)
-            ctrl.add_sensor( address, port, gain, name )
+            name      = cfg["name"]
+            gain      = cfg.get("gain"     ,    1)
+            model     = cfg.get("model"    ,   "")
+            version   = cfg.get("version"  ,   "")
+            ctrl.add_sensor( address, port, gain, name, model=model, version=version )
 
     # Main loop.
     while True:
-        ctrl.printer(fmt=print_as)
-        #ctrl.printer(fmt='raw'  )
-        #ctrl.printer(fmt='list' )
-        #ctrl.printer(fmt='table')
+        #ctrl.printer(fmt=print_as)
+
+        ctrl.printer(fmt='raw'  )
+        ctrl.printer(fmt='list' )
+        ctrl.printer(fmt='table')
+
         # Pause for half a second.
         time.sleep(sleep_for)
 
