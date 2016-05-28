@@ -52,13 +52,14 @@ def ADS1115_value_converter(gain, bits=15):
     print "gain {:.2f} maxRange {} vRange {}".format(gain, maxRange, str(vRange))
 
     def conv(value):
-        res = (float(value) / float(maxRange)) * float(vRange[1] - vRange[0])
-        #print "maxRange {} vRange {} value {} res {}".format(maxRange, str(vRange), value, res)
-        return res
+        prop = (float(value) / float(maxRange))
+        volt = prop * float(vRange[1] - vRange[0])
+        #print "maxRange {} vRange {} value {} prop {} volt {}".format(maxRange, str(vRange), value, prop, volt)
+        return (prop, volt)
 
     return conv
 
-def APDS_9002(version, to_voltage, fmt="{:4.0f} Lux"):
+def APDS_9002(version, to_voltage, fmt="{res:4.0f} Lux"):
     """
     Luminance sensor
     http://www.seeedstudio.com/wiki/Grove_-_Luminance_Sensor
@@ -116,38 +117,39 @@ def APDS_9002(version, to_voltage, fmt="{:4.0f} Lux"):
     size      = len(VoutArray)
 
     def func(value):
-        #print "APDS_9002 :: value  : {}".format(value)
-        val = to_voltage( value )
-        #print "APDS_9002 :: voltage: {}".format(val  )
+        #print "APDS_9002 :: value     : {}".format(value)
+        prop, volt = to_voltage( value )
+        #print "APDS_9002 :: proportion: {}".format(prop )
+        #print "APDS_9002 :: voltage   : {}".format(volt )
 
         Luminance = -1
 
         # take care the value is within range
         # val = constrain(val, _in[0], _in[size-1]);
-        if   (val <= VoutArray[0     ]):
+        if   (volt <= VoutArray[0     ]):
             Luminance = LuxArray[0     ]
 
-        elif (val >= VoutArray[size-1]):
+        elif (volt >= VoutArray[size-1]):
             Luminance =  LuxArray[size-1]
 
         else:
             # search right interval
             pos = 1;  # _in[0] allready tested
-            while(val > VoutArray[pos]): pos += 1
+            while(volt > VoutArray[pos]): pos += 1
 
             # this will handle all exact "points" in the _in array
-            if (val == VoutArray[pos]):
+            if (volt == VoutArray[pos]):
                 Luminance = LuxArray[pos]
 
             else:
                 # interpolate in the right segment for the rest
-                Luminance = (val - VoutArray[pos-1]) * (LuxArray[pos] - LuxArray[pos-1]) / (VoutArray[pos] - VoutArray[pos-1]) + LuxArray[pos-1]
+                Luminance = (volt - VoutArray[pos-1]) * (LuxArray[pos] - LuxArray[pos-1]) / (VoutArray[pos] - VoutArray[pos-1]) + LuxArray[pos-1]
 
-        return fmt.format( Luminance )
+        return fmt.format( **{ "value": value, "prop": prop, "volt": volt, "res": Luminance } )
 
     return func
 
-def GL5528(version, to_voltage, fmt="{:4.0f} Lux"):
+def GL5528(version, to_voltage, fmt="{res:3.0f} %"):
     """
     Light sensor
     http://www.seeedstudio.com/wiki/Grove_-_Light_Sensor
@@ -159,21 +161,33 @@ def GL5528(version, to_voltage, fmt="{:4.0f} Lux"):
     LOW in the dark.
 
     Specifications:
-    Voltage: 3-5V
-    Supply Current: 0.5-3mA
-    Light resistance: 20KΩ
-    Dark resistance: 1MΩ
-    Response time: 20-30 secs
-    Peak Wavelength: 540 nm
-    Ambient temperature: -30~70℃
+    Voltage            : 3-5V
+    Supply Current     : 0.5-3mA
+    Light resistance   : 20K ohms
+    Dark resistance    : 1M ohms
+    Response time      : 20-30 secs
+    Peak Wavelength    : 540 nm
+    Ambient temperature: -30~70
+
+    int sensorValue = analogRead(0);
+    Rsensor=(float)(1023-sensorValue)*10/sensorValue;
     """
 
     def func(value):
-        print "APDS_9002 :: value  : {}".format(value)
-        val = to_voltage( value )
-        print "APDS_9002 :: voltage: {}".format(val  )
+        #print "GL5528 ::   value     : {}".format(value)
+        prop, volt = to_voltage( value )
+        #print "GL5528 ::   proportion: {}".format(prop )
+        #print "GL5528 ::   voltage   : {}".format(volt )
 
-        return val
+        revProp = 1.0 - prop
+
+        #print "GL5528 :: R proportion: {}".format(revProp )
+
+        res     = revProp * 100.0
+
+        #print "GL5528 :: resistance  : {}".format(res )
+
+        return fmt.format(**{ 'value': value, 'prop': prop, 'volt': volt, 'revProp': revProp, 'res': res })
 
     return func
 
