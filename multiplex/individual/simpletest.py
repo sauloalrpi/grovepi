@@ -25,7 +25,17 @@ class adcs(object):
 
         if address not in self.adcs:
             print "adding address", address
-            self.adcs[ address ] = Adafruit_ADS1x15.ADS1115( address )
+
+            addressInt = address
+            if any([isinstance(addressInt, x) for x in [str, unicode]]):
+                print "converting address {}".format(addressInt),
+                addressInt = int(addressInt, 16)
+                print "to {}".format( addressInt )
+
+            else:
+                print "address {} already {}".format(addressInt, type(addressInt))
+            
+            self.adcs[ address ] = Adafruit_ADS1x15.ADS1115( addressInt )
         
         return self.adcs[ address ]
         
@@ -53,8 +63,10 @@ class sensor(object):
 
     adcs    = adcs()
 
-    def __init__(self, address, port, gain, name, model="", version=""):
-        print 'address', address
+    def __init__(self, address=None, port=None, gain=None, name=None, model=None, samples=1, delay=0, version=""):
+        if any([x is None for x in address, port, gain, name, model]):
+            print "Address {} port {} gain {} name {} model {} are all compulsory parameters".format(address, port, gain, name, model)
+            sys.exit(1)
 
         if gain == "2/3": gain = 2/3
 
@@ -63,9 +75,29 @@ class sensor(object):
         self.gain       = gain
         self.name       = name
         self.model      = model
+
+        self.samples    = samples
+        self.delay      = delay
         self.version    = version
+
         self.to_voltage = converters.ADS1115_value_converter(gain)
         self.converter  = converters.get_converter(self.model, self.version, self.to_voltage)
+
+    def read_adc(self):
+        adc  = self.adcs.get(self.address)
+
+        val = adc.read_adc(self.port, gain=self.gain)
+
+        # https://forums.adafruit.com/viewtopic.php?f=19&t=83633
+        # The chip might have some accumulated charge or ADC offset, so try taking two readings, 
+        # throwing the first away, then using the second. Sometimes that's the best way to 
+        # handle such a change.
+
+        time.sleep(0.0001)
+
+        val = adc.read_adc(self.port, gain=self.gain)
+
+        return val
 
     def raw(self):
         """
@@ -77,8 +109,23 @@ class sensor(object):
         Each value will be a 12 or 16 bit signed integer value depending on the
         ADC (ADS1015 = 12-bit, ADS1115 = 16-bit).
         """
-        adc = self.adcs.get(self.address)
-        val = adc.read_adc(self.port, gain=self.gain)
+
+        val  = None
+        if self.samples > 1:
+            vals = []
+
+            for i in xrange(self.samples):
+                val  = self.read_adc()
+                vals.append(val)
+                if self.delay > 0:
+                    #print "s",
+                    time.sleep(self.delay)
+
+            val  = float(sum(vals))/float(len(vals))
+
+        else:
+            val  = self.read_adc()
+
         return val
         
     def conv(self, val=None):
@@ -99,6 +146,8 @@ class sensor(object):
             'port'     : self.port    ,
             'gain'     : self.gain    ,
             'name'     : self.name    ,
+            'samples'  : self.samples ,
+            'delay'    : self.delay   ,
             'model'    : self.model   ,
             'version'  : self.version ,
             'raw'      : raw          ,
@@ -109,12 +158,14 @@ class sensor(object):
         print str(self)
 
     def __repr__(self):
-        return "<SENSOR :: {} : address: {} port: {} gain: {} model: {} version: {}>".format(self.name, hex(self.address), self.port, self.gain, self.model, self.version)
+        return "<SENSOR :: {} : address: {} port: {} gain: {} samples {} model: {} version: {}>".format(self.name, self.address, self.port, self.gain, self.samples, self.model, self.version)
         
 
 class controller(object):
-    def __init__(self):
-        self.sensors = defaultdict(lambda: defaultdict(dict))
+    def __init__(self, delay=0):
+        self.delay   = delay
+
+        self.sensors = defaultdict(dict)
 
         self.print_fmts = {
             'table': self.print_as_table,
@@ -126,114 +177,131 @@ class controller(object):
         self.max_cell      = 0
 
         self.fmt_address   = ""
-        self.fmt_cell      = ""
+        self.fmt_cell_t    = ""
+        self.fmt_cell_v    = ""
         self.fmt_row_line  = ""
+        self.fmt_cols      = ["Address", "Port", "Name", "Model", "Version",  "Gain", "Samples", "Raw", "Conv"]
+        self.fmt_cols_max  = max([len(x) for x in self.fmt_cols])
         self.fmt_list      = ""
         self.fmt_list_len  = 0
 
-    def add_sensor(self, address, port, gain, name, model="", version="", converter=None):
-        self.sensors[address][port][name] = sensor(address, port, gain, name, model=model, version=version)
+    def add_sensor(self, data):
+        sens = sensor(**data)
 
-        self.max_address   = len(str(hex(address))) if len(str(hex(address))) > self.max_address else self.max_address
-        self.max_cell      = max([len(str(x)) for x in [hex(address), str(port), str(gain), str(name), str(model), str(version)]] + [self.max_cell])
+        self.sensors[sens.address][sens.port] = sens
 
-        self.fmt_address   = '|'
-        self.fmt_cell      = '|'
-        self.fmt_row_line  = '|'
+        self.max_address   = len(str(sens.address)) if len(str(sens.address)) > self.max_address else self.max_address
+        self.max_cell      = max([len(str(x)) for x in [sens.address, sens.port, sens.name, sens.model, sens.version, sens.gain, sens.samples]] + [self.max_cell, self.fmt_cols_max])
 
-        num_ids            = 5
+        self.fmt_address   = '|{:'+str(self.max_cell)+'s}|'
+        self.fmt_cell_t    = '|{:'+str(self.max_cell)+'s}|'
+        self.fmt_cell_v    = '|{:'+str(self.max_cell)+'s}|'
+        self.fmt_row_line  = '|' + ('-'*self.max_cell) + '|'
+
+        num_ids            = 7
         num_vals           = 2
         num_cols           = num_ids + num_vals
+
         self.fmt_list      = '|' + (('{:'+str(self.max_cell)+'s}|')*(num_ids)) + (('{:>'+str(self.max_cell)+'s}|')*(num_vals))
         self.fmt_list_len  = (self.max_cell*num_cols) + num_cols + 1
 
         for sensor_num, (address, ports) in enumerate(sorted(self.sensors.items())):
             num_ports          = len(ports)
             len_port           = ( self.max_cell * num_ports )
-            self.fmt_address  += '{:'+str(len_port)+'s}|'
-            self.fmt_row_line += '-'*(len_port) + '|'
+            self.fmt_address  += '{:'+str(len_port+num_ports-1)+'s}|'
+            self.fmt_row_line += '-'*(len_port+num_ports-1) + '|'
 
-            for port_num, (port, names) in enumerate(sorted(ports.items())):
-                self.fmt_cell += '{:'+str(self.max_cell)+'s}|'
+            for port_num, (port, sen) in enumerate(sorted(ports.items())):
+                self.fmt_cell_t += '{:' +str(self.max_cell)+'s}|'
+                self.fmt_cell_v += '{:>'+str(self.max_cell)+'s}|'
 
     def as_dict(self):
-        data = defaultdict(lambda: defaultdict(dict))
+        data = defaultdict(dict)
         
         for address, ports in sorted(self.sensors.items()):
-            for port, names in sorted(ports.items()):
-                for name, sensor in sorted(names.items()):
-                    data[address][port][name] = sensor.as_dict()
+            for port, sensor in sorted(ports.items()):
+                data[address][port] = sensor.as_dict()
+                time.sleep(self.delay)
 
         return data
 
-    def as_table(self):
-        data = self.as_dict()
+    def as_table(self, data=None):
+        if data is None:
+            data      = self.as_dict()
+
         res  = []
 
         for address, ports in sorted(data.items()):
-            for port, names in sorted(ports.items()):
-                for name, vals in sorted(names.items()):
-                    model   = vals['model'  ]
-                    version = vals['version']
-                    raw     = vals['raw'    ]
-                    conv    = vals['conv'   ]
-                    res.append( ( hex(address), port, name, model, version, raw, conv ) )
+            for port, vals in sorted(ports.items()):
+                name    = vals['name'   ]
+                model   = vals['model'  ]
+                version = vals['version']
+                gain    = vals['gain'   ]
+                samples = vals['samples']
+                raw     = vals['raw'    ]
+                conv    = vals['conv'   ]['fmt']
+                res.append( ( address, port, name, model, version, gain, samples, raw, conv ) )
 
         return res
 
-    def printer(self, fmt='table'):
+    def printer(self, data=None, fmt='table'):
         if fmt in self.print_fmts:
-            self.print_fmts[fmt]()
+            self.print_fmts[fmt](data=data)
 
         else:
             print "unknown format"
             sys.exit(1)
 
-    def print_as_table(self, fmt="raw"):
-        data      = self.as_table()
+    def print_as_table(self, data):
+        if data is None:
+            data      = self.as_table()
 
-        gtr       = 5 if fmt == "raw" else 6
-
-        addresses = [ str(d[  0]) for d in data ]
-        ports     = [ str(d[  1]) for d in data ]
-        names     = [     d[  2]  for d in data ]
-        models    = [     d[  3]  for d in data ]
-        versions  = [     d[  4]  for d in data ]
-        vals      = [ str(d[gtr]) for d in data ]
+        addresses = [self.fmt_cols[0]] + [     d[0]  for d in data ]
 
         print self.fmt_row_line.format()
         print self.fmt_address .format( *addresses )
-        print self.fmt_cell    .format( *ports     )
-        print self.fmt_cell    .format( *names     )
-        print self.fmt_cell    .format( *models    )
-        print self.fmt_cell    .format( *versions  )
+
+        for i in xrange(1, len(data[0]) -2):
+            vals = [self.fmt_cols[i]] + [ str(d[i]) for d in data ]
+            print self.fmt_cell_t  .format( *vals )
+
         print self.fmt_row_line.format()
-        print self.fmt_cell    .format( *vals      )
+
+        for i in xrange(len(data[0]) -2, len(data[0])):
+            vals = [self.fmt_cols[i]] + [ str(d[i]) for d in data ]
+            print self.fmt_cell_v  .format( *vals )
+
         print self.fmt_row_line.format()
+            
         print
 
-    def print_as_list(self):
-        data      = self.as_table()
+    def print_as_list(self, data=None):
+        if data is None:
+            data      = self.as_table()
+
+        print '-'*(self.fmt_list_len)
+
+        print self.fmt_list.format(*self.fmt_cols)
 
         print '-'*(self.fmt_list_len)
 
         for row_num, line in enumerate(data):
-            lineFmt =  self.fmt_list.format(*[str(x) for x in line])
-            print lineFmt
+            print self.fmt_list.format(*[str(x) for x in line])
 
         print '-'*(self.fmt_list_len)
         print
 
-    def print_as_raw(self):
-        print str(self)
+    def print_as_raw(self, data=None):
+        print self.__repr__(data=data)
 
-    def __repr__(self):
-        data = self.as_table()
+    def __repr__(self, data=None):
+        if data is None:
+            data      = self.as_table()
 
         line  = "CONTROLLER START\n"
 
         for dat in data:
-            line += " address {} port {} name {} model {} version {} raw {} conv {}\n".format(*dat)
+            line += " address {} port {} name {} model {} version {} gain {} samples {} raw {} conv {}\n".format(*dat)
 
         line += "CONTROLLER END\n"
 
@@ -244,56 +312,60 @@ def correct_devices(devices):
         for port, data in ports.items():
             ports[int(port)] = data
             del ports[port]
-        devices[int(address, 16)] = ports
-        del devices[address]
+        #devices[int(address, 16)] = ports
+        #del devices[address]
     return devices
 
-def start(config):
+def getController(config):
     print('Reading ADS1x15 values, press Ctrl-C to quit...')
 
-    print_as  = config.get('print_as' , 'table')
-    sleep_for = config.get('sleep_for', 0.5)
     devices   = config['devices']
 
     devices   = correct_devices(devices)
 
-    ctrl      = controller()
+    delay     = config.get('delay', 0)
+
+    ctrl      = controller(delay=delay)
 
     for address, ports in sorted(devices.items()):
         for port, cfg in sorted(ports.items()):
-            name      = cfg["name"]
-            gain      = cfg.get("gain"     ,    1)
-            model     = cfg.get("model"    ,   "")
-            version   = cfg.get("version"  ,   "")
-            ctrl.add_sensor( address, port, gain, name, model=model, version=version )
+            cfg["address"] = address
+            cfg["port"   ] = port
+            ctrl.add_sensor( cfg )
 
-    # Main loop.
-    while True:
-        ctrl.printer(fmt=print_as)
-
-        #ctrl.printer(fmt='raw'  )
-        #ctrl.printer(fmt='list' )
-        #ctrl.printer(fmt='table')
-
-        # Pause for half a second.
-        time.sleep(sleep_for)
-
-
+    return ctrl
 
 
 
 def main():
-    infile = sys.argv[1]
+    infile    = sys.argv[1]
 
-    filecont = open(infile, 'r').read()
+    filecont  = open(infile, 'r').read()
 
     print filecont
 
-    config = json.loads(filecont)
+    config    = json.loads(filecont)
 
     print config
 
-    start(config)
+    ctrl      = getController(config)
+
+    print_as  = config.get('print_as' , 'table')
+    sleep_for = config.get('sleep_for', 0.5)
+
+    print "sleep_for", sleep_for
+    # Main loop.
+    while True:
+        ctrl.printer(fmt=print_as)
+
+        """
+        t = ctrl.as_table()
+        for f in ('raw', 'list', 'table'): ctrl.printer(fmt=f, data=t)
+        """
+
+        # Pause for half a second.
+        time.sleep(sleep_for)
+
 
 
 

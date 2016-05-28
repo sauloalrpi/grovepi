@@ -59,7 +59,7 @@ def ADS1115_value_converter(gain, bits=15):
 
     return conv
 
-def APDS_9002(version, to_voltage, fmt="{res:4.0f} Lux"):
+def APDS_9002(version, to_voltage):
     """
     Luminance sensor
     http://www.seeedstudio.com/wiki/Grove_-_Luminance_Sensor
@@ -116,7 +116,7 @@ def APDS_9002(version, to_voltage, fmt="{res:4.0f} Lux"):
     LuxArray  = [ 1.0108000, 3.1201000, 9.805100, 27.430000, 69.54500, 232.67000, 645.1100, 873.5200, 1000.0 ];
     size      = len(VoutArray)
 
-    def func(value):
+    def func(value, fmt="{conv:4.0f} {unity:}", unity='Lux'):
         #print "APDS_9002 :: value     : {}".format(value)
         prop, volt = to_voltage( value )
         #print "APDS_9002 :: proportion: {}".format(prop )
@@ -145,11 +145,14 @@ def APDS_9002(version, to_voltage, fmt="{res:4.0f} Lux"):
                 # interpolate in the right segment for the rest
                 Luminance = (volt - VoutArray[pos-1]) * (LuxArray[pos] - LuxArray[pos-1]) / (VoutArray[pos] - VoutArray[pos-1]) + LuxArray[pos-1]
 
-        return fmt.format( **{ "value": value, "prop": prop, "volt": volt, "res": Luminance } )
+        data = { "value": value, "prop": prop, "volt": volt, "conv": Luminance, "unity": unity }
+        text = fmt.format( **data )
+        data["fmt"] = text
+        return data
 
     return func
 
-def GL5528(version, to_voltage, fmt="{res:3.0f} %"):
+def GL5528(version, to_voltage):
     """
     Light sensor
     http://www.seeedstudio.com/wiki/Grove_-_Light_Sensor
@@ -173,9 +176,11 @@ def GL5528(version, to_voltage, fmt="{res:3.0f} %"):
     Rsensor=(float)(1023-sensorValue)*10/sensorValue;
     """
 
-    def func(value):
+    def func(value, fmt="{conv:3.0f} {unity:}", unity="%"):
         #print "GL5528 ::   value     : {}".format(value)
+
         prop, volt = to_voltage( value )
+
         #print "GL5528 ::   proportion: {}".format(prop )
         #print "GL5528 ::   voltage   : {}".format(volt )
 
@@ -187,13 +192,101 @@ def GL5528(version, to_voltage, fmt="{res:3.0f} %"):
 
         #print "GL5528 :: resistance  : {}".format(res )
 
-        return fmt.format(**{ 'value': value, 'prop': prop, 'volt': volt, 'revProp': revProp, 'res': res })
+        data = { "value": value, "prop": revProp, "volt": volt, "conv": res, "unity": unity }
+        text = fmt.format( **data )
+        data["fmt"] = text
+
+        return data
 
     return func
 
-def get_converter(model, version, gain):
+def GUVA_S12D(version, to_voltage):
+    """
+    Grove - UV Sensor
+    http://www.seeedstudio.com/wiki/Grove_-_UV_Sensor
+
+    The Grove - UV Sensor is used for detecting the intensity of incident 
+    ultraviolet(UV) radiation. This form of electromagnetic radiation has 
+    shorter wavelengths than visible radiation. The Grove - UV Sensor is 
+    based on the sensor GUVA-S12D which has a wide spectral range of 
+    200nm-400nm. The module outputs electrical signal which varies with 
+    the UV intensity, which gives your suggestion if it is a good idea to 
+    beach today
+    
+    Specification
+
+    Item                Min  Typical Max Unit
+    Operating Voltage   3.0  5.0     5.1 VDC
+    Current                  0.31        mA
+    Output Voltage                       mV
+    Response wavelength  240 ~       370 nm
+    Working Temperature  -30 ~       85  C
+
+    About our Grove - UV Sensor, we have converted Photocurrent to 
+    corresponding voltage value collected by Arduino/Seeeduino. The 
+    output voltage and the UV index is linear:
+
+    illumination intensity = 307 * Vsig
+
+    where: 
+    Vsig is the value of voltage measured from the SIG pin of the Grove 
+    interface, unit V.
+
+    illumination intensity unit: mW/m2 for the combination strength of 
+    UV light with wavelength range: 240nm~370nm
+
+    Note: To calculate the UV index value, please refer to 
+    http://www2.epa.gov/sunwise/uv-index. It's hard to say that the 
+    measurement from this sensor can be converted to the EPA standard 
+    UV index, but can be estimated roughly.
+
+    UV Index = illumination intensity / 200
+
+      int sensorValue;
+      long  sum=0;
+      for(int i=0;i<1024;i++)// accumulate readings for 1024 times
+       {  
+          sensorValue=analogRead(A0);
+          sum=sensorValue+sum;
+          delay(2);
+       }   
+     long meanVal = sum/1024;  // get mean value
+     Serial.print("The current UV index is:");
+     Serial.print((meanVal*1000/4.3-83)/21);// get a detailed calculating expression for UV index in schematic files. 
+     Serial.print("\n");
+     delay(20); 
+    """
+
+    def func(value, fmt="{conv:3.0f} {unity:} ({uv_index:1.0f})", unity="mW/m2"):
+        #print "GUVA_S12D ::   value     : {}".format(value)
+
+        if value < 0: value = 0
+
+        prop, volt = to_voltage( value )
+
+        #print "GUVA_S12D ::   proportion: {}".format(prop )
+        #print "GUVA_S12D ::   voltage   : {}".format(volt )
+
+        illumination_intensity = 307 * volt
+
+        uv_index = illumination_intensity / 200
+
+        res  = illumination_intensity
+
+        data = { "value": value, "prop": prop, "volt": volt, "conv": res, "unity": unity, "uv_index": uv_index, "illumination_intensity": illumination_intensity }
+        text = fmt.format( **data )
+        data["fmt"] = text
+
+        #print "GUVA_S12D ::   res       : {}".format(text )
+
+        return data
+
+    return func
+
+
+def get_converter(model, version, to_voltage):
     if model in db:
-        return db[model](version, gain)
+        return db[model](version, to_voltage)
 
     else:
         print "no such converter {}".format(model)
@@ -203,6 +296,7 @@ def get_converter(model, version, gain):
 db = {
     "GL5528"   :    GL5528,
     "APDS-9002": APDS_9002,
+    "GUVA-S12D": GUVA_S12D
 }
 
 

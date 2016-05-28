@@ -1,22 +1,31 @@
 {
  "print_as": "list",
- "sleep_for": 0.5,
+ "sleep_for": 0.01,
+ "delay": 0,
  "devices": {
-    "0x48": {
-        "0": {
-            "name": "Luminance",
-            "gain": 1,
-            "model": "APDS-9002",
-            "version": "v1.0"
-        }
-    },
-    "0x4B": {
-        "0": {
-            "name": "Light Sensor",
-            "gain": 1,
-            "model": "GL5528",
-            "version": "v1.1"
-        }
-    }
+  "0x4A": {
+   "0": {
+    "name": "UV Sensor/Index",
+    "gain": 1,
+    "model": "GUVA-S12D",
+    "version": "v1.1",
+    "samples": 100,
+    "delay": 0.00001
+   },
+   "2": {
+    "name": "Light Sensor",
+    "gain": 1,
+    "model": "GL5528",
+    "version": "v1.1"
+   }
+  },
+  "0x4B": {
+   "3": {
+    "name": "Luminance",
+    "gain": 1,
+    "model": "APDS-9002",
+    "version": "v1.0"
+   }
   }
+ }
 }
