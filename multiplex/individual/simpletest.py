@@ -63,7 +63,7 @@ class sensor(object):
 
     adcs    = adcs()
 
-    def __init__(self, address=None, port=None, gain=None, name=None, model=None, samples=1, delay=0, version=""):
+    def __init__(self, address=None, port=None, gain=None, name=None, model=None, samples=1, data_rate=128, delay=0, version=""):
         if any([x is None for x in address, port, gain, name, model]):
             print "Address {} port {} gain {} name {} model {} are all compulsory parameters".format(address, port, gain, name, model)
             sys.exit(1)
@@ -77,6 +77,7 @@ class sensor(object):
         self.model      = model
 
         self.samples    = samples
+        self.data_rate  = data_rate
         self.delay      = delay
         self.version    = version
 
@@ -95,7 +96,7 @@ class sensor(object):
 
         time.sleep(0.0001)
 
-        val = adc.read_adc(self.port, gain=self.gain)
+        val = adc.read_adc(self.port, gain=self.gain, data_rate=self.data_rate)
 
         return val
 
@@ -131,47 +132,62 @@ class sensor(object):
     def conv(self, val=None):
         if val is None:
             val = self.raw()
+
         return self.converter(val)
 
     def both(self):
         val = self.raw()
         cnv = self.conv(val=val)
+
         return (val, cnv)
+
+    def conf_as_dict(self):
+        return {
+            'address'  : self.address  ,
+            'port'     : self.port     ,
+            'gain'     : self.gain     ,
+            'name'     : self.name     ,
+            'samples'  : self.samples  ,
+            'data_rate': self.data_rate,
+            'delay'    : self.delay    ,
+            'model'    : self.model    ,
+            'version'  : self.version
+        }
+
+    def conf_as_str(self):
+        conf = self.conf_as_dict()
+        return " ".join(["{}: {}".format(x, conf[x]) for x in sorted(conf.keys())])
 
     def as_dict(self):
         raw, conv = self.both()
 
-        return {
-            'address'  : self.address ,
-            'port'     : self.port    ,
-            'gain'     : self.gain    ,
-            'name'     : self.name    ,
-            'samples'  : self.samples ,
-            'delay'    : self.delay   ,
-            'model'    : self.model   ,
-            'version'  : self.version ,
-            'raw'      : raw          ,
-            'conv'     : conv
-        }
+        conf      = self.conf_as_dict()
+
+        conf['raw' ] = raw
+        for c in conv:
+            conf['conv {}'.format(c)] = conv[c]
+
+        return conf
+
+    def as_str(self, data=None):
+        if data is not None:
+            data = self.as_dict()
+
+        res  =       " ".join( ["{}: {}"     .format(x, data[x]) for x in sorted( data        .keys() ) if x != 'conv' ] )
+        res += " " + " ".join( ["conv {}: {}".format(x, data[x]) for x in sorted( data['conv'].keys() )                ] )
+
+        return res
 
     def printer(self):
         print str(self)
 
     def __repr__(self):
-        return "<SENSOR :: {} : address: {} port: {} gain: {} samples {} model: {} version: {}>".format(self.name, self.address, self.port, self.gain, self.samples, self.model, self.version)
+        return "<SENSOR :: {}>".format(self.conf_as_str())
         
 
-class controller(object):
-    def __init__(self, delay=0):
-        self.delay   = delay
-
-        self.sensors = defaultdict(dict)
-
-        self.print_fmts = {
-            'table': self.print_as_table,
-            'list' : self.print_as_list ,
-            'raw'  : self.print_as_raw
-        }
+class controller_fmt(object):
+    def __init__(self, cols):
+        self.cols          = cols
 
         self.max_address   = 0
         self.max_cell      = 0
@@ -180,16 +196,12 @@ class controller(object):
         self.fmt_cell_t    = ""
         self.fmt_cell_v    = ""
         self.fmt_row_line  = ""
-        self.fmt_cols      = ["Address", "Port", "Name", "Model", "Version",  "Gain", "Samples", "Raw", "Conv"]
+        self.fmt_cols      = [ c.title() for c in self.cols ]
         self.fmt_cols_max  = max([len(x) for x in self.fmt_cols])
         self.fmt_list      = ""
         self.fmt_list_len  = 0
 
-    def add_sensor(self, data):
-        sens = sensor(**data)
-
-        self.sensors[sens.address][sens.port] = sens
-
+    def update(self, sensors, sens):
         self.max_address   = len(str(sens.address)) if len(str(sens.address)) > self.max_address else self.max_address
         self.max_cell      = max([len(str(x)) for x in [sens.address, sens.port, sens.name, sens.model, sens.version, sens.gain, sens.samples]] + [self.max_cell, self.fmt_cols_max])
 
@@ -205,7 +217,7 @@ class controller(object):
         self.fmt_list      = '|' + (('{:'+str(self.max_cell)+'s}|')*(num_ids)) + (('{:>'+str(self.max_cell)+'s}|')*(num_vals))
         self.fmt_list_len  = (self.max_cell*num_cols) + num_cols + 1
 
-        for sensor_num, (address, ports) in enumerate(sorted(self.sensors.items())):
+        for sensor_num, (address, ports) in enumerate(sorted(sensors.items())):
             num_ports          = len(ports)
             len_port           = ( self.max_cell * num_ports )
             self.fmt_address  += '{:'+str(len_port+num_ports-1)+'s}|'
@@ -214,6 +226,72 @@ class controller(object):
             for port_num, (port, sen) in enumerate(sorted(ports.items())):
                 self.fmt_cell_t += '{:' +str(self.max_cell)+'s}|'
                 self.fmt_cell_v += '{:>'+str(self.max_cell)+'s}|'
+
+    def get_as_table(self, data):
+        addresses = [self.fmt_cols[0]] + [     d[0]  for d in data ]
+
+        line  = self.fmt_row_line.format() + "\n"
+        line += self.fmt_address .format( *addresses ) + "\n"
+
+        for i in xrange(1, len(data[0]) -2):
+            vals = [self.fmt_cols[i]] + [ str(d[i]) for d in data ]
+            line += self.fmt_cell_t  .format( *vals ) + "\n"
+
+        line += self.fmt_row_line.format() + "\n"
+
+        for i in xrange(len(data[0]) -2, len(data[0])):
+            vals = [self.fmt_cols[i]] + [ str(d[i]) for d in data ]
+            line += self.fmt_cell_v  .format( *vals )  + "\n"
+
+        line += self.fmt_row_line.format() + "\n\n"
+
+        return line
+
+    def get_as_list(self, data):
+        line  = '-'*(self.fmt_list_len) + "\n"
+
+        line += self.fmt_list.format(*self.fmt_cols) + "\n"
+
+        line += '-'*(self.fmt_list_len) + "\n"
+
+        for row_num, row in enumerate(data):
+            line += self.fmt_list.format(*[str(x) for x in row])  + "\n"
+
+        line += '-'*(self.fmt_list_len) + "\n\n"
+
+        return line
+
+    def get_as_str(self, data):
+        line  = ""
+
+        for row in data:
+            line += " ".join( [ " {}: {}".format(self.fmt_cols[c], row[c]) for c in xrange(len(self.fmt_cols)) ] ) + "\n"
+
+        return line
+
+
+class controller(object):
+    def __init__(self, delay=0):
+        self.delay      = delay
+
+        self.sensors    = defaultdict(dict)
+
+        self.print_fmts = {
+            'table': self.print_as_table,
+            'list' : self.print_as_list ,
+            'str'  : self.print_as_str
+        }
+
+        self.cols      = ('address', 'port', 'name', 'model', 'version', 'gain', 'samples', 'raw', 'conv fmt')
+
+        self.formatter = controller_fmt(self.cols)
+
+    def add_sensor(self, data):
+        sens = sensor(**data)
+
+        self.sensors[sens.address][sens.port] = sens
+
+        self.formatter.update(self.sensors, sens)
 
     def as_dict(self):
         data = defaultdict(dict)
@@ -232,15 +310,8 @@ class controller(object):
         res  = []
 
         for address, ports in sorted(data.items()):
-            for port, vals in sorted(ports.items()):
-                name    = vals['name'   ]
-                model   = vals['model'  ]
-                version = vals['version']
-                gain    = vals['gain'   ]
-                samples = vals['samples']
-                raw     = vals['raw'    ]
-                conv    = vals['conv'   ]['fmt']
-                res.append( ( address, port, name, model, version, gain, samples, raw, conv ) )
+            for port, sens in sorted(ports.items()):
+                res.append( tuple( [ sens[x] for x in self.cols ] ) )
 
         return res
 
@@ -252,56 +323,34 @@ class controller(object):
             print "unknown format"
             sys.exit(1)
 
-    def print_as_table(self, data):
+    def print_as_table(self, data=None):
         if data is None:
             data      = self.as_table()
 
-        addresses = [self.fmt_cols[0]] + [     d[0]  for d in data ]
-
-        print self.fmt_row_line.format()
-        print self.fmt_address .format( *addresses )
-
-        for i in xrange(1, len(data[0]) -2):
-            vals = [self.fmt_cols[i]] + [ str(d[i]) for d in data ]
-            print self.fmt_cell_t  .format( *vals )
-
-        print self.fmt_row_line.format()
-
-        for i in xrange(len(data[0]) -2, len(data[0])):
-            vals = [self.fmt_cols[i]] + [ str(d[i]) for d in data ]
-            print self.fmt_cell_v  .format( *vals )
-
-        print self.fmt_row_line.format()
-            
-        print
+        print self.formatter.get_as_table(data)
 
     def print_as_list(self, data=None):
         if data is None:
             data      = self.as_table()
 
-        print '-'*(self.fmt_list_len)
+        print self.formatter.get_as_list(data)
 
-        print self.fmt_list.format(*self.fmt_cols)
-
-        print '-'*(self.fmt_list_len)
-
-        for row_num, line in enumerate(data):
-            print self.fmt_list.format(*[str(x) for x in line])
-
-        print '-'*(self.fmt_list_len)
-        print
-
-    def print_as_raw(self, data=None):
-        print self.__repr__(data=data)
-
-    def __repr__(self, data=None):
+    def print_as_str(self, data=None):
         if data is None:
             data      = self.as_table()
 
+        print "CONTROLLER START"
+
+        print self.formatter.get_as_str(data),
+
+        print "CONTROLLER END\n"
+
+    def __repr__(self, data=None):
         line  = "CONTROLLER START\n"
 
-        for dat in data:
-            line += " address {} port {} name {} model {} version {} gain {} samples {} raw {} conv {}\n".format(*dat)
+        for address, ports in sorted(data.items()):
+            for port, sens in sorted(ports.items()):
+                line += sens.conf_as_str() + "\n"
 
         line += "CONTROLLER END\n"
 
@@ -320,11 +369,8 @@ def getController(config):
     print('Reading ADS1x15 values, press Ctrl-C to quit...')
 
     devices   = config['devices']
-
     devices   = correct_devices(devices)
-
     delay     = config.get('delay', 0)
-
     ctrl      = controller(delay=delay)
 
     for address, ports in sorted(devices.items()):
@@ -342,25 +388,23 @@ def main():
 
     filecont  = open(infile, 'r').read()
 
-    print filecont
-
     config    = json.loads(filecont)
-
-    print config
 
     ctrl      = getController(config)
 
     print_as  = config.get('print_as' , 'table')
-    sleep_for = config.get('sleep_for', 0.5)
+
+    sleep_for = config.get('sleep_for',     0.5)
 
     print "sleep_for", sleep_for
+
     # Main loop.
     while True:
         ctrl.printer(fmt=print_as)
 
         """
         t = ctrl.as_table()
-        for f in ('raw', 'list', 'table'): ctrl.printer(fmt=f, data=t)
+        for f in ('str', 'list', 'table'): ctrl.printer(fmt=f, data=t)
         """
 
         # Pause for half a second.
