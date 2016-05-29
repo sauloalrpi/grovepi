@@ -1,4 +1,5 @@
 import math
+import sys
 
 """
 #https://learn.adafruit.com/adafruit-4-channel-adc-breakouts?view=all
@@ -284,6 +285,39 @@ def GUVA_S12D(version, to_voltage):
     return func
 
 
+def LM358(version, to_voltage):
+    """
+    Grove - Sound Sensor
+    http://www.seeedstudio.com/wiki/Grove_-_Sound_Sensor
+
+    Grove - Sound Sensor can detect the sound strength of the environment. The main 
+    component of the module is a simple microphone, which is based on the LM358 amplifier 
+    and an electret microphone. This module's output is analog and can be easily sampled 
+    and tested by a Seeeduino.
+
+    Specifications
+        Operating voltage range      : 4-12V
+        Operating current (Vcc=5V)   : 4-8mA
+        Voltage Gain (VS=6V, f=1 kHz): 26dB
+        Microphone sensitivity (1Khz): 52-48dB
+        Microphone Impedance         : 2.2K ohms
+        Microphone Frequency         : 16-20Khz
+        Microphone S/N ratio         : 54dB
+    """
+
+    def func(value, fmt="{conv:3.0f} {unity:}", unity="%"):
+        prop, volt = to_voltage( value )
+
+        res = prop * 100.0
+
+        data = { "value": value, "prop": prop, "volt": volt, "conv": res, "unity": unity}
+        text = fmt.format( **data )
+        data["fmt"] = text
+
+        return data
+
+    return func    
+
 def get_converter(model, version, to_voltage):
     if model in db:
         return db[model](version, to_voltage)
@@ -296,7 +330,8 @@ def get_converter(model, version, to_voltage):
 db = {
     "GL5528"   :    GL5528,
     "APDS-9002": APDS_9002,
-    "GUVA-S12D": GUVA_S12D
+    "GUVA-S12D": GUVA_S12D,
+    "LM358"    :     LM358
 }
 
 

@@ -164,6 +164,7 @@ class sensor(object):
         conf      = self.conf_as_dict()
 
         conf['raw' ] = raw
+
         for c in conv:
             conf['conv {}'.format(c)] = conv[c]
 

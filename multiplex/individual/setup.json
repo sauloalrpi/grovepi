@@ -25,6 +25,12 @@
     "gain": 1,
     "model": "APDS-9002",
     "version": "v1.0"
+   },
+   "1": {
+    "name": "Sound",
+    "gain": 1,
+    "model": "LM358",
+    "version": "v1.6"
    }
   }
  }
